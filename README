@@ -1,0 +1,43 @@
+NAME:
+  Java API Monitor — monitor new versions of a Java library and create profile for API Tracker.
+  
+  The tool is intended to be used with the API Tracker tool to visualize API changes timeline of a Java library.
+  
+  The tool is developed by Andrey Ponomarenko: http://abi-laboratory.pro/
+
+INSTALL:
+  sudo make install prefix=/usr
+
+REQUIRES:
+  Perl 5
+  cURL
+
+USAGE:
+  japi-monitor [options] [profile]
+  
+  The input profile will be extended after execution. Then it can be passed
+  to the API Tracker.
+
+EXAMPLES:
+  japi-monitor -get    slf4j.json
+  japi-monitor -build  slf4j.json
+
+PROFILE FORMAT:
+
+{
+  "Name":       "SHORT LIBRARY NAME",
+  "SourceUrl":  "URL TO DOWNLOAD PACKAGES"
+}
+
+PROFILE EXAMPLE:
+
+{
+  "Name":       "slf4j",
+  "SourceUrl":  "http://www.slf4j.org/dist/"
+}
+
+ADV. OPTIONS:
+The option "SourceDir" allows to index packages from a local directory instead of downloading them from "SourceUrl".
+
+ADV. USAGE:
+  For advanced usage, see output of --help option.
