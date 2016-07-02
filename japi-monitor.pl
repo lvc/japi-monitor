@@ -175,6 +175,8 @@ my $Profile;
 my $DB;
 my $TARGET_LIB;
 
+# Download
+my $DownloadedSnapshot = 0;
 my %NewVer;
 
 sub get_Modules()
@@ -430,10 +432,8 @@ sub getScmUpdateTime()
             }
         }
         
-        if($Head)
-        {
-            $Time = `stat -c \%Y \"$Head\"`;
-            chomp($Time);
+        if($Head) {
+            $Time = getTimeF($Head);
         }
         
         if($Time) {
@@ -442,6 +442,16 @@ sub getScmUpdateTime()
     }
     
     return undef;
+}
+
+sub getTimeF($)
+{
+    my $Path = $_[0];
+    
+    my $Time = `stat -c \%Y \"$Path\"`;
+    chomp($Time);
+    
+    return $Time;
 }
 
 sub getVersions_Local()
@@ -523,6 +533,11 @@ sub getVersions()
     }
     
     my @Links = getLinks($SourceUrl);
+    
+    if(my $SnapshotUrl = $Profile->{"SnapshotUrl"}) {
+        @Links = (@Links, getLinks($SnapshotUrl));
+    }
+    
     my @Pages = getPages($SourceUrl, \@Links);
     
     # One step into directory tree
@@ -603,6 +618,25 @@ sub getHighRelease()
     return undef;
 }
 
+sub getHighBeta()
+{
+    my @Vers = keys(%{$DB->{"Source"}});
+    @Vers = naturalSequence($Profile, @Vers);
+    @Vers = reverse(@Vers);
+    
+    foreach my $V (@Vers)
+    {
+        if(getVersionType($V, $Profile) eq "release") {
+            return undef;
+        }
+        else {
+            return $V;
+        }
+    }
+    
+    return undef;
+}
+
 sub isOldMicro($)
 {
     my $V = $_[0];
@@ -626,16 +660,39 @@ sub getPackage($$$)
 {
     my ($Link, $P, $V) = @_;
     
+    my $IsSnapshot = isSnapshot($V, $Profile);
+    
     if(defined $DB->{"Source"}{$V})
     { # already downloaded
-        return -1;
+        if($IsSnapshot)
+        {
+            if($DownloadedSnapshot)
+            { # download once
+                return -1;
+            }
+            else {
+                $DownloadedSnapshot = 1;
+            }
+        }
+        else {
+            return -1;
+        }
     }
     
-    if(getVersionType($V, $Profile) ne "release")
+    if(lc($V) ne "snapshot"
+    and getVersionType($V, $Profile) ne "release")
     {
         if(my $HighRelease = getHighRelease())
         {
             if(cmpVersions_P($V, $HighRelease, $Profile)==-1)
+            { # do not download old alfa/beta/pre releases
+                return -1;
+            }
+        }
+        
+        if(my $HighBeta = getHighBeta())
+        {
+            if(cmpVersions_P($V, $HighBeta, $Profile)==-1)
             { # do not download old alfa/beta/pre releases
                 return -1;
             }
@@ -661,13 +718,26 @@ sub getPackage($$$)
     
     my $Dir = $REPO."/".$TARGET_LIB."/".$V;
     
+    if($IsSnapshot)
+    {
+        if(-d $Dir) {
+            rmtree($Dir);
+        }
+    }
+    
     if(not -e $Dir) {
         mkpath($Dir);
     }
     
     my $To = $Dir."/".$P;
-    if(-f $To) {
-        return -1;
+    if(-f $To)
+    {
+        if($IsSnapshot) {
+            unlink($To);
+        }
+        else {
+            return -1;
+        }
     }
     
     printMsg("INFO", "Downloading package \'$P\'");
@@ -698,7 +768,7 @@ sub getPackage($$$)
     my $Log = readFile($TMP_DIR."/wget_log");
     my $R = readFile($TMP_DIR."/wget_res");
     
-    if($Log=~/\[text\/html\]/)
+    if($Log=~/\[text\/html\]/ or not -B $To)
     {
         rmtree($Dir);
         printMsg("ERROR", "\'$Link\' is not a package\n");
@@ -739,6 +809,7 @@ sub readPage($)
         $Cmd = "curl -L \"$Page\"";
         $Cmd .= " --connect-timeout $CONNECT_TIMEOUT";
         $Cmd .= " --retry $ACCESS_TRIES --output \"$To\"";
+        $Cmd .= " -w \"\%{url_effective}\\n\"";
     }
     else
     {
@@ -801,6 +872,9 @@ sub getPackages(@)
         {
             my ($P, $V, $E) = ($2, $3, $4);
             
+            $V=~s/\Av(\d)/$1/i; # v1.1
+            $V=~s/[\-\.](linux|bin|final|ga)\Z//i; # 1.5_r04-linux
+            
             if(defined $Res{$V})
             {
                 if($Res{$V}{"Ext"} eq "zip")
@@ -812,14 +886,6 @@ sub getPackages(@)
             if($V=~/mingw|msvc/i) {
                 next;
             }
-            
-            if($V=~/snapshot/i) {
-                next;
-            }
-            
-            $V=~s/\Av(\d)/$1/i; # v1.1
-            # $V=~s/\Arelease\-//i;
-            $V=~s/[\-\.](linux|bin|final)\Z//i; # 1.5_r04-linux
             
             if(my $Suffix = $Profile->{"PackageSuffix"}) {
                 $V=~s/$Suffix\Z//i;
@@ -852,6 +918,29 @@ sub getPackages(@)
         }
     }
     
+    if(defined $Profile->{"SnapshotVer"}
+    and my $SnapshotVer = $Profile->{"SnapshotVer"})
+    { # select latest snapshot
+        foreach my $V (sort {cmpVersions_P($b, $a, $Profile)} keys(%Res))
+        {
+            if(isSnapshot($V, $Profile))
+            {
+                if(not defined $Res{$SnapshotVer})
+                { # remove older
+                    $Res{$SnapshotVer} = $Res{$V};
+                }
+                
+                delete($Res{$V});
+            }
+            else
+            {
+                if($V=~/snapshot/i) {
+                    delete($Res{$V});
+                }
+            }
+        }
+    }
+    
     return \%Res;
 }
 
@@ -874,13 +963,21 @@ sub getPages($$)
         
         if($Link=~/https:\/\/sourceforge\.net\/projects\/[^\/]+\/files\/[^\/]+\/([^\/]+)\/\Z/)
         {
-            if(defined $DB->{"Source"}{$1}) {
+            if(defined $DB->{"Source"}{$1})
+            {
+                if($Debug) {
+                    printMsg("INFO", "Skip: $Link");
+                }
                 next;
             }
         }
-        elsif($Link=~/\/([\d\.\-\_v]+)\/\Z/)
+        elsif($Link=~/\/($TARGET_LIB[\-_]*|)([\d\.\-\_v]+)(|\.Final|\.GA)\/\Z/i)
         {
-            if(defined $DB->{"Source"}{$1}) {
+            if(defined $DB->{"Source"}{$2})
+            {
+                if($Debug) {
+                    printMsg("INFO", "Skip: $Link");
+                }
                 next;
             }
         }
@@ -931,8 +1028,11 @@ sub getLinks($)
     my @Res = ();
     my @AllLinks = (sort {$b cmp $a} keys(%Links1), sort {$b cmp $a} keys(%Links2), sort {$b cmp $a} keys(%Links3), sort {$b cmp $a} keys(%Links4));
     
-    foreach (@AllLinks) {
+    foreach (@AllLinks)
+    {
         while($_=~s/\/[^\/]+\/\.\.\//\//g){};
+        
+        $_=~s/(\/):/$1/g; # https://dl.*/groovy/maven/:apache-groovy-binary-*.zip
     }
     
     my $SiteAddr = getSiteAddr($Page);
@@ -1278,6 +1378,7 @@ sub createProfile($)
         $N_Info->{"Installed"} = $DB->{"Installed"}{$V};
         $N_Info->{"Source"} = $DB->{"Source"}{$V};
         $N_Info->{"Changelog"} = $DB->{"Changelog"}{$V};
+        
         if(not $N_Info->{"Changelog"})
         { # default
             if(defined $Profile->{"Changelog"})
@@ -1307,6 +1408,11 @@ sub createProfile($)
             
             foreach my $K (sort keys(%{$O_Info}))
             {
+                if($K eq "Source"
+                and isSnapshot($V, $Profile)) {
+                    next;
+                }
+                
                 if($K ne "Pos")
                 {
                     if(defined $O_Info->{$K}) {
@@ -1560,8 +1666,13 @@ sub buildPackage($$)
     {
         if(defined $DB->{"Installed"}{$V})
         {
-            if($V ne "current" or not defined $NewVer{$V})
+            if($V eq "current" or isSnapshot($V, $Profile))
             {
+                if(not defined $NewVer{$V}) {
+                    return -1;
+                }
+            }
+            else {
                 return -1;
             }
         }
@@ -1811,6 +1922,10 @@ sub scenario()
     {
         printMsg("INFO", $HelpMessage);
         exit(0);
+    }
+    
+    if(-d "objects_report") {
+        exitStatus("Error", "Can't execute inside the ABI tracker home directory");
     }
     
     my $Profile_Path = $ARGV[0];

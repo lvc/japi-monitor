@@ -73,6 +73,28 @@ sub cmpVersions($$)
         }
     }
     
+    # version-release
+    # 0.12-20140410 vs 0.12.1-20160607
+    if($A=~/\A([^\-]+)\-([^\-]+)\Z/)
+    {
+        my ($AV, $AR) = ($1, $2);
+        if($B=~/\A([^\-]+)\-([^\-]+)\Z/)
+        {
+            my ($BV, $BR) = ($1, $2);
+            
+            my $VR = cmpVersions($AV, $BV);
+            
+            if($VR!=0) {
+                return $VR;
+            }
+            
+            return cmpVersions($AR, $BR);
+        }
+    }
+    
+    $A=~s/\-SP(\d+)/\.$1/ig; # 1.0-SP1 (service pack) is greater than 1.0
+    $B=~s/\-SP(\d+)/\.$1/ig;
+    
     $A=~s/(\d)([a-z])/$1.$2/ig;
     $B=~s/(\d)([a-z])/$1.$2/ig;
     
@@ -276,6 +298,15 @@ sub cmpVersions_P($$$)
             }
         }
     }
+    elsif(defined $Profile->{"SnapshotVer"})
+    {
+        my $SA = ($A eq $Profile->{"SnapshotVer"});
+        my $SB = ($B eq $Profile->{"SnapshotVer"});
+        
+        if($SA or $SB) {
+            return ($SA cmp $SB);
+        }
+    }
     
     return cmpVersions($A, $B);
 }
@@ -309,6 +340,14 @@ sub skipVersion($$)
             {
                 return 1;
             }
+        }
+    }
+    
+    if(my $Min = $Profile->{"MinimalVersion"})
+    {
+        if(cmpVersions_P($V, $Min, $Profile)==-1)
+        {
+            return 1;
         }
     }
     
@@ -387,6 +426,29 @@ sub naturalSequence(@)
     return @NaturalSequence;
 }
 
+sub isSnapshot($$)
+{
+    my ($Version, $Profile) = @_;
+    
+    if(defined $Profile->{"SnapshotPattern"}
+    and my $SPattern = $Profile->{"SnapshotPattern"})
+    {
+        if($Version=~/$SPattern/i) {
+            return 1;
+        }
+    }
+    
+    if(defined $Profile->{"SnapshotVer"}
+    and my $SnapshotVer = $Profile->{"SnapshotVer"})
+    {
+        if($Version eq $SnapshotVer) {
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
 sub checkReleasePattern($$)
 {
     my ($Version, $Profile) = @_;
@@ -420,10 +482,11 @@ sub getVersionType($$)
     }
     
     if($Version!~/[a-z]/i
-    or $Version=~/\A[\d\.]+[\-\_]*r\d+\Z/i
+    or $Version=~/\A[\d\.]+[\-\_]*(r|sp)\d+\Z/i
     or $Version=~/\A[\d\.]+\.v\d+\Z/i)
     { # 1.5_r04
       # 9.3.7.v20160115
+      # 1.0-SP1
         return "release";
     }
     
@@ -435,7 +498,7 @@ sub getVersionType($$)
     my %Type = ();
     foreach my $W (sort @Words)
     {
-        if($W=~/\A(final)\Z/i) {
+        if($W=~/\A(final|ga)\Z/i) {
             $Type{"release"}=1;
         }
         elsif($W=~/\A(r|rel|release)\Z/i
