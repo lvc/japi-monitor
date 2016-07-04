@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 ##################################################################
-# Java API Monitor 1.0
+# Java API Monitor 1.1
 # A tool to monitor new versions of a Java library and create
 # profile for API Tracker.
 #
@@ -39,7 +39,7 @@ use File::Basename qw(dirname basename);
 use Cwd qw(abs_path cwd);
 use Data::Dumper;
 
-my $TOOL_VERSION = "1.0";
+my $TOOL_VERSION = "1.1";
 my $DB_PATH = "Monitor.data";
 my $REPO = "src";
 my $INSTALLED = "installed";
