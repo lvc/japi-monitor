@@ -140,10 +140,9 @@ sub isArchive($)
     return ($Path=~/\.(jar)\Z/i);
 }
 
-sub check_Cmd($)
+sub checkCmd($)
 {
     my $Cmd = $_[0];
-    return 0 if(not $Cmd);
     
     if(-x $Cmd) {
         return 1;

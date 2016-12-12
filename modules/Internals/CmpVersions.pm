@@ -311,9 +311,16 @@ sub cmpVersions_P($$$)
     return cmpVersions($A, $B);
 }
 
-sub skipVersion($$)
+sub skipVersion(@)
 {
-    my ($V, $Profile) = @_;
+    my $V = shift(@_);
+    my $Profile = shift(@_);
+    
+    my $MinCheck = 1;
+    
+    if(@_) {
+        $MinCheck = shift(@_);
+    }
     
     if(defined $Profile->{"SkipVersions"})
     {
@@ -343,11 +350,14 @@ sub skipVersion($$)
         }
     }
     
-    if(my $Min = $Profile->{"MinimalVersion"})
+    if($MinCheck)
     {
-        if(cmpVersions_P($V, $Min, $Profile)==-1)
+        if(my $Min = $Profile->{"MinimalVersion"})
         {
-            return 1;
+            if(cmpVersions_P($V, $Min, $Profile)==-1)
+            {
+                return 1;
+            }
         }
     }
     
@@ -471,7 +481,7 @@ sub getVersionType($$)
     if(defined $Profile->{"LetterReleases"})
     {
         if($Version=~/\A[\d\.\-]+[a-z]*\Z/i
-        and index($Version, "beta")==-1)
+        and $Version!~/alpha|beta/i)
         {
             return "release";
         }
@@ -555,6 +565,10 @@ sub getMajor($)
     }
     
     return join(".", @P);
+}
+
+sub getVDepth($) {
+    return $_[0]=~tr!\.!!;
 }
 
 return 1;

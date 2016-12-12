@@ -16,6 +16,7 @@
 # ============
 #  Perl 5 (5.8 or newer)
 #  cURL
+#  wget
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License or the GNU Lesser
@@ -323,7 +324,7 @@ sub getCurrent()
     
     if($Git)
     {
-        if(not check_Cmd("git"))
+        if(not checkCmd("git"))
         {
             printMsg("ERROR", "can't find \"git\"");
             return;
@@ -331,7 +332,7 @@ sub getCurrent()
     }
     elsif($Svn)
     {
-        if(not check_Cmd("svn"))
+        if(not checkCmd("svn"))
         {
             printMsg("ERROR", "can't find \"svn\"");
             return;
@@ -517,7 +518,7 @@ sub getVersions()
     
     if($USE_CURL)
     {
-        if(not check_Cmd("curl"))
+        if(not checkCmd("curl"))
         {
             printMsg("ERROR", "can't find \"curl\"");
             return;
@@ -525,7 +526,7 @@ sub getVersions()
     }
     else
     {
-        if(not check_Cmd("wget"))
+        if(not checkCmd("wget"))
         {
             printMsg("ERROR", "can't find \"wget\"");
             return;
@@ -543,6 +544,9 @@ sub getVersions()
     # One step into directory tree
     foreach my $Page (@Pages)
     {
+        if($Page eq $SourceUrl) {
+            next;
+        }
         foreach my $Link (getLinks($Page))
         {
             push(@Links, $Link);
@@ -804,8 +808,8 @@ sub readPage($)
     
     my $Cmd = "";
     
-    if($USE_CURL)
-    {
+    if($USE_CURL and index($Page, "ftp:")!=0)
+    { # TODO: how to list absolute paths in FTP directory using curl?
         $Cmd = "curl -L \"$Page\"";
         $Cmd .= " --connect-timeout $CONNECT_TIMEOUT";
         $Cmd .= " --retry $ACCESS_TRIES --output \"$To\"";
@@ -951,7 +955,7 @@ sub getPages($$)
     
     foreach my $Link (@{$Links})
     {
-        if($Link!~/\/\Z/ and $Link!~/\A\/\d[\d\.\-]*\Z/)
+        if($Link!~/\/\Z/ and $Link!~/\/v?\d[\d\.\-]*\Z/i)
         {
             next;
         }
@@ -971,14 +975,35 @@ sub getPages($$)
                 next;
             }
         }
-        elsif($Link=~/\/($TARGET_LIB[\-_]*|)([\d\.\-\_v]+)(|\.Final|\.GA)\/\Z/i)
+        elsif($Link=~/\/($TARGET_LIB[\-_]*|)v?([\d\.\-\_]+)(|\.Final|\.GA)[\/]*\Z/i)
         {
+            my $V = $2;
             if(defined $DB->{"Source"}{$2})
             {
                 if($Debug) {
                     printMsg("INFO", "Skip: $Link");
                 }
                 next;
+            }
+            elsif(skipVersion($V, $Profile, 0))
+            {
+                if($Debug) {
+                    printMsg("INFO", "Skip: $Link");
+                }
+                next;
+            }
+            elsif(my $Min = $Profile->{"MinimalVersion"})
+            {
+                if(getVDepth($V)>=getVDepth($Min))
+                {
+                    if(cmpVersions_P($V, $Min, $Profile)==-1)
+                    {
+                        if($Debug) {
+                            printMsg("INFO", "Skip: $Link");
+                        }
+                        next;
+                    }
+                }
             }
         }
         

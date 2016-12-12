@@ -11,6 +11,7 @@ INSTALL:
 REQUIRES:
   Perl 5
   cURL
+  wget
 
 USAGE:
   japi-monitor [options] [profile]
