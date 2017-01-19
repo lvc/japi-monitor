@@ -1,7 +1,7 @@
 ##################################################################
 # Module for Java API Monitor to compare version numbers
 #
-# Copyright (C) 2015-2016 Andrey Ponomarenko's ABI Laboratory
+# Copyright (C) 2015-2017 Andrey Ponomarenko's ABI Laboratory
 #
 # Written by Andrey Ponomarenko
 #
@@ -339,7 +339,8 @@ sub skipVersion(@)
             }
         }
     }
-    elsif(defined $Profile->{"SkipOdd"})
+    
+    if(defined $Profile->{"SkipOdd"})
     {
         if($V=~/\A\d+\.(\d+)/)
         {

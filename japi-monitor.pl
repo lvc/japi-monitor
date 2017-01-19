@@ -4,7 +4,7 @@
 # A tool to monitor new versions of a Java library and create
 # profile for API Tracker.
 #
-# Copyright (C) 2015-2016 Andrey Ponomarenko's ABI Laboratory
+# Copyright (C) 2015-2017 Andrey Ponomarenko's ABI Laboratory
 #
 # Written by Andrey Ponomarenko
 #
@@ -79,7 +79,7 @@ my %ERROR_CODE = (
 
 my $ShortUsage = "Java API Monitor $TOOL_VERSION
 A tool to monitor new versions of a Java library
-Copyright (C) 2016 Andrey Ponomarenko's ABI Laboratory
+Copyright (C) 2017 Andrey Ponomarenko's ABI Laboratory
 License: GPL or LGPL
 
 Usage: $CmdName [options] [profile]
