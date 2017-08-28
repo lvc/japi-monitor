@@ -51,15 +51,15 @@ my $ACCESS_TIMEOUT = 15;
 my $CONNECT_TIMEOUT = 5;
 my $ACCESS_TRIES = 2;
 my $USE_CURL = 1;
-my $PKG_EXT = "tar\\.bz2|tar\\.gz|tar\\.xz|tar\\.lzma|tar\\.lz|tar\\.Z|tbz2|tgz|tar|zip";
+my $PKG_EXT = "tar\\.bz2|tar\\.gz|tar\\.xz|tar\\.lzma|tar\\.lz|tar\\.Z|tbz2|tgz|txz|tar|zip";
 
-$PKG_EXT .= "|jar";
+$PKG_EXT .= "|jar|aar";
 
 # Internal modules
 my $MODULES_DIR = get_Modules();
 push(@INC, dirname($MODULES_DIR));
 
-my ($Help, $DumpVersion, $Get, $Build, $Rebuild, $OutputProfile,
+my ($Help, $DumpVersion, $Get, $GetOld, $Build, $Rebuild, $OutputProfile,
 $TargetVersion, $LimitOps, $BuildNew, $Debug);
 
 my $CmdName = basename($0);
@@ -98,6 +98,7 @@ GetOptions("h|help!" => \$Help,
   "dumpversion!" => \$DumpVersion,
 # general options
   "get!" => \$Get,
+  "get-old!" => \$GetOld,
   "build!" => \$Build,
   "rebuild!" => \$Rebuild,
   "limit=s" => \$LimitOps,
@@ -145,7 +146,10 @@ INFORMATION OPTIONS:
 GENERAL OPTIONS:
   -get
       Download new library versions.
-      
+  
+  -get-old
+      Download old packages from OldSourceUrl option of the profile.
+  
   -build
       Build library versions.
   
@@ -175,6 +179,7 @@ GENERAL OPTIONS:
 my $Profile;
 my $DB;
 my $TARGET_LIB;
+my $TARGET_TITLE;
 
 # Download
 my $DownloadedSnapshot = 0;
@@ -503,7 +508,12 @@ sub getVersions_Local()
 
 sub getVersions()
 {
-    my $SourceUrl = $Profile->{"SourceUrl"};
+    my $SourceTag = "SourceUrl";
+    if($GetOld) {
+        $SourceTag = "OldSourceUrl";
+    }
+    
+    my $SourceUrl = $Profile->{$SourceTag};
     
     if(not $SourceUrl)
     {
@@ -514,7 +524,12 @@ sub getVersions()
         return;
     }
     
-    printMsg("INFO", "Searching for new packages");
+    if($GetOld) {
+        printMsg("INFO", "Searching for old packages");
+    }
+    else {
+        printMsg("INFO", "Searching for new packages");
+    }
     
     if($USE_CURL)
     {
@@ -533,49 +548,47 @@ sub getVersions()
         }
     }
     
-    my @Links = getLinks($SourceUrl);
+    my @Links = getLinks(\$SourceUrl);
     
     if(my $SnapshotUrl = $Profile->{"SnapshotUrl"}) {
-        @Links = (@Links, getLinks($SnapshotUrl));
+        @Links = (@Links, getLinks(\$SnapshotUrl));
     }
     
-    my @Pages = getPages($SourceUrl, \@Links);
+    my $Depth = 2;
     
-    # One step into directory tree
-    foreach my $Page (@Pages)
+    if($GetOld)
     {
-        if($Page eq $SourceUrl) {
-            next;
+        if(defined $Profile->{"OldSourceUrlDepth"})
+        { # More steps into directory tree
+            $Depth = $Profile->{"OldSourceUrlDepth"};
         }
-        foreach my $Link (getLinks($Page))
-        {
-            push(@Links, $Link);
+    }
+    else
+    {
+        if(defined $Profile->{"SourceUrlDepth"})
+        { # More steps into directory tree
+            $Depth = $Profile->{"SourceUrlDepth"};
         }
     }
     
-    if(defined $Profile->{"SourceUrlDepth"})
-    { # More steps into directory tree
-        my $Depth = $Profile->{"SourceUrlDepth"};
+    if($Depth>=2)
+    {
+        my %Checked = ();
+        $Checked{$SourceUrl} = 1;
         
-        if($Depth>2)
+        foreach my $D (1 .. $Depth - 1)
         {
-            my %Checked = map {$_=>1} @Pages;
-            
-            foreach my $D (1 .. $Depth - 2)
+            my @Pages = getPages($SourceUrl, \@Links);
+            foreach my $Page (@Pages)
             {
-                my @MorePages = getPages($SourceUrl, \@Links);
-                foreach my $Page (@MorePages)
+                if(not defined $Checked{$Page})
                 {
-                    if(not defined $Checked{$Page})
+                    $Checked{$Page} = 1;
+                    foreach my $Link (getLinks(\$Page))
                     {
-                        $Checked{$Page} = 1;
-                        foreach my $Link (getLinks($Page))
-                        {
-                            push(@Links, $Link);
-                        }
+                        push(@Links, $Link);
                     }
                 }
-                
             }
         }
     }
@@ -641,14 +654,14 @@ sub getHighBeta()
     return undef;
 }
 
-sub isOldMicro($)
+sub isOldMicro($$)
 {
-    my $V = $_[0];
-    my $M = getMajor($V);
+    my ($V, $L) = @_;
+    my $M = getMajor($V, $L);
     
     foreach my $Ver (sort keys(%{$DB->{"Source"}}))
     {
-        if(getMajor($Ver) eq $M)
+        if(getMajor($Ver, $L) eq $M)
         {
             if(cmpVersions_P($Ver, $V, $Profile)>=0)
             {
@@ -703,9 +716,9 @@ sub getPackage($$$)
         }
     }
     
-    if(defined $Profile->{"LatestMicro"})
+    if(defined $Profile->{"LatestMicro"} and $Profile->{"LatestMicro"} eq "On")
     {
-        if(isOldMicro($V))
+        if(isOldMicro($V, 2))
         { # do not download old micro releases
             return -1;
         }
@@ -744,7 +757,7 @@ sub getPackage($$$)
         }
     }
     
-    printMsg("INFO", "Downloading package \'$P\'");
+    printMsg("INFO", "Downloading package \'$P\' ($TARGET_TITLE)");
     
     my $Pid = fork();
     unless($Pid)
@@ -806,6 +819,8 @@ sub readPage($)
         $Page .= "/";
     }
     
+    my $UserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:50.0) Gecko/20100101 Firefox/50.0";
+    
     my $Cmd = "";
     
     if($USE_CURL and index($Page, "ftp:")!=0)
@@ -814,6 +829,7 @@ sub readPage($)
         $Cmd .= " --connect-timeout $CONNECT_TIMEOUT";
         $Cmd .= " --retry $ACCESS_TRIES --output \"$To\"";
         $Cmd .= " -w \"\%{url_effective}\\n\"";
+        $Cmd .= " -A \"$UserAgent\"";
     }
     else
     {
@@ -823,6 +839,7 @@ sub readPage($)
         # $Cmd .= " --quiet";
         $Cmd .= " --connect-timeout=$CONNECT_TIMEOUT";
         $Cmd .= " --tries=$ACCESS_TRIES --output-document=\"$To\"";
+        $Cmd .= " --user-agent=\"$UserAgent\"";
     }
     
     my $Pid = fork();
@@ -876,8 +893,15 @@ sub getPackages(@)
         {
             my ($P, $V, $E) = ($2, $3, $4);
             
+            if(defined $Profile->{"SkipExt"})
+            {
+                if(grep {$_ eq $E} @{$Profile->{"SkipExt"}}) {
+                    next;
+                }
+            }
+            
             $V=~s/\Av(\d)/$1/i; # v1.1
-            $V=~s/[\-\.](linux|bin|final|ga)\Z//i; # 1.5_r04-linux
+            $V=~s/[\-\.](linux|bin|final|release|ga)\Z//i; # 1.5_r04-linux
             
             if(defined $Res{$V})
             {
@@ -953,6 +977,9 @@ sub getPages($$)
     my ($Top, $Links) = @_;
     my @Res = ();
     
+    $Top=~s/\?.*\Z//g;
+    $Top=~s&\A\w+://&//&; # do not match protocol
+    
     foreach my $Link (@{$Links})
     {
         if($Link!~/\/\Z/ and $Link!~/\/v?\d[\d\.\-]*\Z/i)
@@ -965,45 +992,27 @@ sub getPages($$)
             next;
         }
         
-        if($Link=~/https:\/\/sourceforge\.net\/projects\/[^\/]+\/files\/[^\/]+\/([^\/]+)\/\Z/)
-        {
-            if(defined $DB->{"Source"}{$1})
-            {
-                if($Debug) {
-                    printMsg("INFO", "Skip: $Link");
-                }
-                next;
-            }
+        my $PLink = $Link;
+        $PLink=~s/\%20/ /gi;
+        
+        my $DirVer = undef;
+        
+        if($PLink=~/https:\/\/sourceforge\.net\/projects\/[^\/]+\/files\/[^\/]+\/([^\/]+)\/\Z/) {
+            $DirVer = $1;
         }
-        elsif($Link=~/\/($TARGET_LIB[\-_]*|)v?([\d\.\-\_]+)(|\.Final|\.GA)[\/]*\Z/i)
+        elsif($PLink=~/\/($TARGET_LIB[\-_ ]*|)v?(\d[^\/]*?)(|\.Final|\.RELEASE|\.GA)[\/]*\Z/i)
+        { # 1.5.0-RC17
+            $DirVer = $2;
+        }
+        
+        if($DirVer)
         {
-            my $V = $2;
-            if(defined $DB->{"Source"}{$2})
+            if(skipOldLink($DirVer))
             {
                 if($Debug) {
-                    printMsg("INFO", "Skip: $Link");
+                    printMsg("INFO", "Skip (Old dir): $Link");
                 }
                 next;
-            }
-            elsif(skipVersion($V, $Profile, 0))
-            {
-                if($Debug) {
-                    printMsg("INFO", "Skip: $Link");
-                }
-                next;
-            }
-            elsif(my $Min = $Profile->{"MinimalVersion"})
-            {
-                if(getVDepth($V)>=getVDepth($Min))
-                {
-                    if(cmpVersions_P($V, $Min, $Profile)==-1)
-                    {
-                        if($Debug) {
-                            printMsg("INFO", "Skip: $Link");
-                        }
-                        next;
-                    }
-                }
             }
         }
         
@@ -1013,9 +1022,69 @@ sub getPages($$)
     return @Res;
 }
 
+sub skipOldLink($)
+{
+    my $V = $_[0];
+    
+    my $VType = getVersionType($V, $Profile);
+    
+    if($VType eq "unknown") {
+        return 0;
+    }
+    
+    if(defined $DB->{"Source"}{$V}) {
+        return 1;
+    }
+    elsif(skipVersion($V, $Profile, 0)) {
+        return 1;
+    }
+    elsif(my $Min = $Profile->{"MinimalVersion"})
+    {
+        if(getVDepth($V)>=getVDepth($Min))
+        {
+            if(cmpVersions_P($V, $Min, $Profile)==-1) {
+                return 1;
+            }
+        }
+    }
+    
+    if($VType ne "release"
+    and my $HighestRel = getHighestRelease())
+    {
+        if(cmpVersions_P($V, $HighestRel, $Profile)==-1)
+        { # do not download old betas
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
+my %Cache;
+sub getHighestRelease()
+{
+    if(defined $Cache{"HighestRelease"}) {
+        return $Cache{"HighestRelease"};
+    }
+    my @Vers = keys(%{$DB->{"Source"}});
+    @Vers = naturalSequence($Profile, @Vers);
+    @Vers = reverse(@Vers);
+    
+    foreach my $V (@Vers)
+    {
+        if(getVersionType($V, $Profile) eq "release")
+        {
+            return ($Cache{"HighestRelease"} = $V);
+        }
+    }
+    
+    return undef;
+}
+
 sub getLinks($)
 {
-    my $Page = $_[0];
+    my $PageRef = $_[0];
+    my $Page = ${$PageRef};
     
     if($Debug) {
         printMsg("INFO", "Reading ".$Page);
@@ -1030,7 +1099,7 @@ sub getLinks($)
     my $Content = readFile($To);
     unlink($To);
     
-    my (%Links1, %Links2, %Links3, %Links4) = ();
+    my (%Links1, %Links2, %Links3, %Links4, %Links5) = ();
     
     my @Lines = split(/\n/, $Content);
     
@@ -1048,10 +1117,18 @@ sub getLinks($)
         while($Line=~s/["']([^"'<>\s]+\.($PKG_EXT))["']//i) {
             $Links4{linkSum($Url, $1)} = 1;
         }
+        while($Line=~s/(src|href)\s*\=\s*([^"'<>\s]+?)[ >]//i) {
+            $Links5{linkSum($Url, $2)} = 1;
+        }
     }
     
-    my @Res = ();
-    my @AllLinks = (sort {$b cmp $a} keys(%Links1), sort {$b cmp $a} keys(%Links2), sort {$b cmp $a} keys(%Links3), sort {$b cmp $a} keys(%Links4));
+    my @L1 = sort {length($a)<=>length($b)} sort {$b cmp $a} keys(%Links1);
+    my @L2 = sort {length($a)<=>length($b)} sort {$b cmp $a} keys(%Links2);
+    my @L3 = sort {length($a)<=>length($b)} sort {$b cmp $a} keys(%Links3);
+    my @L4 = sort {length($a)<=>length($b)} sort {$b cmp $a} keys(%Links4);
+    my @L5 = sort {length($a)<=>length($b)} sort {$b cmp $a} keys(%Links5);
+    
+    my @AllLinks = (@L1, @L2, @L3, @L4, @L5);
     
     foreach (@AllLinks)
     {
@@ -1063,9 +1140,14 @@ sub getLinks($)
     my $SiteAddr = getSiteAddr($Page);
     my $SiteProtocol = getSiteProtocol($Page);
     
+    my @Res = ();
     foreach my $Link (@AllLinks)
     {
-        if(skipUrl($Link)) {
+        if(skipUrl($Link))
+        {
+            if($Debug) {
+                printMsg("INFO", "Skip: $Link");
+            }
             next;
         }
         
@@ -1081,12 +1163,17 @@ sub getLinks($)
         #     next;
         # }
         
-        if(not getSiteProtocol($Link)) {
+        my $LinkProtocol = getSiteProtocol($Link);
+        
+        if(not $LinkProtocol) {
             $Link = $SiteProtocol.$Link;
         }
+        #elsif($LinkProtocol ne $SiteProtocol and $SiteProtocol eq "https://") {
+        #    $Link=~s/\Ahttp\:/https:/;
+        #}
         
         $Link=~s/\%2b/\+/g;
-        $Link=~s/\:21\//\//;
+        $Link=~s/\:\d+\//\//;
         
         if($Link=~/https:\/\/sourceforge\.net\/projects\/[^\/]+\/files\/[^\/]+\/[^\/]+\/[^\/]+(.+)\Z/)
         {
@@ -1097,6 +1184,8 @@ sub getLinks($)
         
         push(@Res, $Link);
     }
+    
+    ${$PageRef} = $Url;
     
     return @Res;
 }
@@ -1369,7 +1458,7 @@ sub createProfile($)
         }
     }
     
-    if(defined $Profile->{"LatestMicro"})
+    if(defined $Profile->{"LatestMicro"} and $Profile->{"LatestMicro"} eq "On")
     {
         my %MaxMicro = ();
         foreach my $V (reverse(@Versions))
@@ -1378,7 +1467,7 @@ sub createProfile($)
                 next;
             }
             
-            my $M = getMajor($V);
+            my $M = getMajor($V, 2);
             
             if(defined $MaxMicro{$M})
             {
@@ -1984,10 +2073,19 @@ sub scenario()
     $TARGET_LIB = $Profile->{"Name"};
     $DB_PATH = "db/".$TARGET_LIB."/".$DB_PATH;
     
+    $TARGET_TITLE = $TARGET_LIB;
+    if($Profile->{"Title"}) {
+        $TARGET_TITLE = $Profile->{"Title"};
+    }
+    
     $DB = readDB($DB_PATH);
     
     checkDB();
     checkFiles();
+    
+    if($GetOld) {
+        getVersions();
+    }
     
     if($Get)
     {

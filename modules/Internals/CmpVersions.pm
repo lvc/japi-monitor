@@ -92,8 +92,8 @@ sub cmpVersions($$)
         }
     }
     
-    $A=~s/\-SP(\d+)/\.$1/ig; # 1.0-SP1 (service pack) is greater than 1.0
-    $B=~s/\-SP(\d+)/\.$1/ig;
+    $A=~s/[\-\.]SP(\d+)/\.$1/ig; # 1.0-SP1 (service pack) is greater than 1.0
+    $B=~s/[\-\.]SP(\d+)/\.$1/ig;
     
     $A=~s/(\d)([a-z])/$1.$2/ig;
     $B=~s/(\d)([a-z])/$1.$2/ig;
@@ -340,6 +340,75 @@ sub skipVersion(@)
         }
     }
     
+    if(defined $Profile->{"KeepMajorMult"})
+    {
+        my @KeepMult = @{$Profile->{"KeepMajorMult"}};
+        
+        if(my $Major = getVerNum($V, 1))
+        {
+            my $Keep = 0;
+            
+            foreach my $K (@KeepMult)
+            {
+                if($Major % $K == 0)
+                {
+                    $Keep = 1;
+                    last;
+                }
+            }
+            
+            if(not $Keep) {
+                return 1;
+            }
+        }
+    }
+    
+    if(defined $Profile->{"KeepMiniMult"})
+    {
+        my @KeepMult = @{$Profile->{"KeepMiniMult"}};
+        
+        if(my $Mini = getVerNum($V, 2))
+        {
+            my $Keep = 0;
+            
+            foreach my $K (@KeepMult)
+            {
+                if($Mini % $K == 0)
+                {
+                    $Keep = 1;
+                    last;
+                }
+            }
+            
+            if(not $Keep) {
+                return 1;
+            }
+        }
+    }
+    
+    if(defined $Profile->{"KeepMicroMult"})
+    {
+        my @KeepMult = @{$Profile->{"KeepMicroMult"}};
+        
+        if(my $Micro = getVerNum($V, 3))
+        {
+            my $Keep = 0;
+            
+            foreach my $K (@KeepMult)
+            {
+                if($Micro % $K == 0)
+                {
+                    $Keep = 1;
+                    last;
+                }
+            }
+            
+            if(not $Keep) {
+                return 1;
+            }
+        }
+    }
+    
     if(defined $Profile->{"SkipOdd"})
     {
         if($V=~/\A\d+\.(\d+)/)
@@ -509,7 +578,7 @@ sub getVersionType($$)
     my %Type = ();
     foreach my $W (sort @Words)
     {
-        if($W=~/\A(final|ga)\Z/i) {
+        if($W=~/\A(final|release|ga)\Z/i) {
             $Type{"release"}=1;
         }
         elsif($W=~/\A(r|rel|release)\Z/i
@@ -531,7 +600,7 @@ sub getVersionType($$)
         elsif($W=~/\A(beta|b)\Z/i) {
             $Type{"beta"}=1;
         }
-        elsif($W=~/\A(pre)\Z/i) {
+        elsif($W=~/\A(pre)\Z/i or $W eq "M") {
             $Type{"pre-release"}=1;
         }
         elsif($W=~/\A(rc|cr)\Z/i) {
@@ -553,19 +622,29 @@ sub getVersionType($$)
     return "unknown";
 }
 
-sub getMajor($)
+sub getMajor($$)
 {
-    my $V = $_[0];
+    my ($V, $L) = @_;
     
-    $V=~s/\-/./;
+    $V=~s/[\-_]/./g;
     
     my @P = split(/\./, $V);
     
-    if($#P>1) {
-        pop(@P);
+    if($#P>=$L) {
+        return join(".", splice(@P, 0, $L));
     }
+    return $V;
+}
+
+sub getVerNum($$)
+{
+    my ($V, $N) = @_;
     
-    return join(".", @P);
+    $V=~s/[\-_]/./g;
+    
+    my @P = split(/\./, $V);
+    
+    return $P[$N-1];
 }
 
 sub getVDepth($) {

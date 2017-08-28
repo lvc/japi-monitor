@@ -1,7 +1,7 @@
 ##################################################################
 # Module for Java API Monitor with basic functions
 #
-# Copyright (C) 2015-2016 Andrey Ponomarenko's ABI Laboratory
+# Copyright (C) 2015-2017 Andrey Ponomarenko's ABI Laboratory
 #
 # Written by Andrey Ponomarenko
 #
@@ -124,10 +124,10 @@ sub extractPackage($$)
 {
     my ($Path, $OutDir) = @_;
     
-    if($Path=~/\.(tar\.\w+|tgz|tbz2)\Z/i) {
+    if($Path=~/\.(tar\.\w+|tgz|tbz2|txz)\Z/i) {
         return "tar -xf $Path --directory=$OutDir";
     }
-    elsif($Path=~/\.zip\Z/i) {
+    elsif($Path=~/\.(zip|aar)\Z/i) {
         return "unzip $Path -d $OutDir";
     }
     
