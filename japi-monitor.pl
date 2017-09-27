@@ -1746,11 +1746,11 @@ sub addParams($$$)
 {
     my ($Cmd, $To, $V) = @_;
     
-    $Cmd=~s/{INSTALL_TO}/$To/g;
-    $Cmd=~s/{VERSION}/$V/g;
+    $Cmd=~s/\{INSTALL_TO\}/$To/g;
+    $Cmd=~s/\{VERSION\}/$V/g;
     
     my $InstallRoot_A = $ORIG_DIR."/".$INSTALLED;
-    $Cmd=~s/{INSTALL_ROOT}/$InstallRoot_A/g;
+    $Cmd=~s/\{INSTALL_ROOT\}/$InstallRoot_A/g;
     
     return $Cmd;
 }
