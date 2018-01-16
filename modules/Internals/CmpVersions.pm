@@ -1,22 +1,24 @@
 ##################################################################
 # Module for Java API Monitor to compare version numbers
 #
-# Copyright (C) 2015-2017 Andrey Ponomarenko's ABI Laboratory
+# Copyright (C) 2015-2018 Andrey Ponomarenko's ABI Laboratory
 #
 # Written by Andrey Ponomarenko
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License or the GNU Lesser
-# General Public License as published by the Free Software Foundation.
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful,
+# This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License
-# and the GNU Lesser General Public License along with this program.
-# If not, see <http://www.gnu.org/licenses/>.
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+# MA  02110-1301  USA.
 ##################################################################
 use strict;
 
@@ -441,6 +443,7 @@ sub naturalSequence(@)
     my @Releases = ();
     my @Unstables = ();
     my @Previews = ();
+    my @Snapshots = ();
     
     foreach my $Version (sort {cmpVersions_P($a, $b, $Profile)} @_)
     {
@@ -461,12 +464,15 @@ sub naturalSequence(@)
         elsif($Type eq "technology-preview") {
             push(@Previews, $Version);
         }
+        elsif(isSnapshot($Version, $Profile)) {
+            push(@Snapshots, $Version);
+        }
         else {
             push(@Unstables, $Version);
         }
     }
     
-    my ($LastRelease, $LastUnstable, $LastPreview) = ();
+    my ($LastRelease, $LastUnstable, $LastPreview, $LastSnapshot) = ();
     
     if(@Releases) {
         $LastRelease = $Releases[$#Releases];
@@ -478,6 +484,10 @@ sub naturalSequence(@)
     
     if(@Previews) {
         $LastPreview = $Previews[$#Previews];
+    }
+    
+    if(@Snapshots) {
+        $LastSnapshot = $Snapshots[$#Snapshots];
     }
     
     my @NaturalSequence = @Releases;
@@ -497,6 +507,10 @@ sub naturalSequence(@)
         else {
             push(@NaturalSequence, $LastUnstable);
         }
+    }
+    
+    if($LastSnapshot) {
+        push(@NaturalSequence, $LastSnapshot);
     }
     
     if(grep {$_ eq "current"} @_) {
@@ -600,7 +614,7 @@ sub getVersionType($$)
         elsif($W=~/\A(beta|b)\Z/i) {
             $Type{"beta"}=1;
         }
-        elsif($W=~/\A(pre)\Z/i or $W eq "M") {
+        elsif($W=~/\A(pre|pr)\Z/i or $W eq "M") {
             $Type{"pre-release"}=1;
         }
         elsif($W=~/\A(rc|cr)\Z/i) {

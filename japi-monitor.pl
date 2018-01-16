@@ -1,10 +1,10 @@
 #!/usr/bin/perl
 ##################################################################
-# Java API Monitor 1.2
+# Java API Monitor 1.3
 # A tool to monitor new versions of a Java library and create
 # profile for API Tracker.
 #
-# Copyright (C) 2015-2017 Andrey Ponomarenko's ABI Laboratory
+# Copyright (C) 2015-2018 Andrey Ponomarenko's ABI Laboratory
 #
 # Written by Andrey Ponomarenko
 #
@@ -18,18 +18,20 @@
 #  cURL
 #  wget
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License or the GNU Lesser
-# General Public License as published by the Free Software Foundation.
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful,
+# This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License
-# and the GNU Lesser General Public License along with this program.
-# If not, see <http://www.gnu.org/licenses/>.
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+# MA  02110-1301  USA.
 ##################################################################
 use Getopt::Long;
 Getopt::Long::Configure ("posix_default", "no_ignore_case", "permute");
@@ -40,7 +42,7 @@ use File::Basename qw(dirname basename);
 use Cwd qw(abs_path cwd);
 use Data::Dumper;
 
-my $TOOL_VERSION = "1.2";
+my $TOOL_VERSION = "1.3";
 my $DB_PATH = "Monitor.data";
 my $REPO = "src";
 my $INSTALLED = "installed";
@@ -79,7 +81,7 @@ my %ERROR_CODE = (
 
 my $ShortUsage = "Java API Monitor $TOOL_VERSION
 A tool to monitor new versions of a Java library
-Copyright (C) 2017 Andrey Ponomarenko's ABI Laboratory
+Copyright (C) 2018 Andrey Ponomarenko's ABI Laboratory
 License: GPL or LGPL
 
 Usage: $CmdName [options] [profile]
@@ -184,6 +186,8 @@ my $TARGET_TITLE;
 # Download
 my $DownloadedSnapshot = 0;
 my %NewVer;
+
+my %Cache;
 
 sub get_Modules()
 {
@@ -550,10 +554,6 @@ sub getVersions()
     
     my @Links = getLinks(\$SourceUrl);
     
-    if(my $SnapshotUrl = $Profile->{"SnapshotUrl"}) {
-        @Links = (@Links, getLinks(\$SnapshotUrl));
-    }
-    
     my $Depth = 2;
     
     if($GetOld)
@@ -584,13 +584,44 @@ sub getVersions()
                 if(not defined $Checked{$Page})
                 {
                     $Checked{$Page} = 1;
-                    foreach my $Link (getLinks(\$Page))
-                    {
+                    foreach my $Link (getLinks(\$Page)) {
                         push(@Links, $Link);
                     }
                 }
             }
         }
+    }
+    
+    if(my $SnapshotUrl = $Profile->{"SnapshotUrl"})
+    {
+        my @SnapLinks = getLinks(\$SnapshotUrl);
+        my $SnapDepth = 1;
+        if(my $SnapshotUrlDepth = $Profile->{"SnapshotUrlDepth"}) {
+            $SnapDepth = $SnapshotUrlDepth
+        }
+        
+        if($SnapDepth>=2)
+        {
+            my %SnapChecked = ();
+            $SnapChecked{$SnapshotUrl} = 1;
+            
+            foreach my $D (1 .. $SnapDepth - 1)
+            {
+                my @SnapPages = getPages($SnapshotUrl, \@SnapLinks, "Snapshot");
+                foreach my $Page (@SnapPages)
+                {
+                    if(not defined $SnapChecked{$Page})
+                    {
+                        $SnapChecked{$Page} = 1;
+                        foreach my $Link (getLinks(\$Page)) {
+                            push(@SnapLinks, $Link);
+                        }
+                    }
+                }
+            }
+        }
+        
+        @Links = (@Links, @SnapLinks);
     }
     
     my $Packages = getPackages(@Links);
@@ -643,6 +674,10 @@ sub getHighBeta()
     
     foreach my $V (@Vers)
     {
+        if(defined $Profile->{"SnapshotVer"}
+        and $V eq $Profile->{"SnapshotVer"}) {
+            next;
+        }
         if(getVersionType($V, $Profile) eq "release") {
             return undef;
         }
@@ -683,7 +718,7 @@ sub getPackage($$$)
     { # already downloaded
         if($IsSnapshot)
         {
-            if($DownloadedSnapshot)
+            if($DownloadedSnapshot or getFilename($DB->{"Source"}{$V}) eq $P)
             { # download once
                 return -1;
             }
@@ -938,7 +973,14 @@ sub getPackages(@)
         }
         elsif($Link=~/archive\/v?([\d\.\-\_]+([ab]\d*|rc\d*|))\.(tar\.gz)/i)
         { # github
-            my $V = $1;
+            my ($V, $E) = ($1, $3);
+            
+            if(defined $Profile->{"SkipExt"})
+            {
+                if(grep {$_ eq $E} @{$Profile->{"SkipExt"}}) {
+                    next;
+                }
+            }
             
             $Res{$V}{"Url"} = $Link;
             $Res{$V}{"Pkg"} = $Pkg."-".$V.".".$3;
@@ -972,9 +1014,16 @@ sub getPackages(@)
     return \%Res;
 }
 
-sub getPages($$)
+sub getPages(@)
 {
-    my ($Top, $Links) = @_;
+    my $Top = shift(@_);
+    my $Links = shift(@_);
+    my $Snap = undef;
+    
+    if(@_) {
+        $Snap = shift(@_);
+    }
+    
     my @Res = ();
     
     $Top=~s/\?.*\Z//g;
@@ -992,22 +1041,36 @@ sub getPages($$)
             next;
         }
         
+        if($Snap)
+        {
+            if(my $SnapshotDirPattern = $Profile->{"SnapshotDirPattern"})
+            {
+                if(getFilename($Link)!~/$SnapshotDirPattern/) {
+                    next;
+                }
+            }
+        }
+        
         my $PLink = $Link;
         $PLink=~s/\%20/ /gi;
         
         my $DirVer = undef;
+        my $Snapshot = undef;
         
         if($PLink=~/https:\/\/sourceforge\.net\/projects\/[^\/]+\/files\/[^\/]+\/([^\/]+)\/\Z/) {
             $DirVer = $1;
         }
-        elsif($PLink=~/\/($TARGET_LIB[\-_ ]*|)v?(\d[^\/]*?)(|\.Final|\.RELEASE|\.GA)[\/]*\Z/i)
+        elsif($PLink=~/\/($TARGET_LIB[\-_ ]*|)v?(\d[^\/]*?)(|\.Final|\.RELEASE|\.GA)(|\-SNAPSHOT)[\/]*\Z/i)
         { # 1.5.0-RC17
             $DirVer = $2;
+            if($4) {
+                $Snapshot = 1;
+            }
         }
         
         if($DirVer)
         {
-            if(skipOldLink($DirVer))
+            if(skipOldLink($DirVer, $Snapshot))
             {
                 if($Debug) {
                     printMsg("INFO", "Skip (Old dir): $Link");
@@ -1022,9 +1085,10 @@ sub getPages($$)
     return @Res;
 }
 
-sub skipOldLink($)
+sub skipOldLink($$)
 {
     my $V = $_[0];
+    my $Snapshot = $_[1];
     
     my $VType = getVersionType($V, $Profile);
     
@@ -1048,7 +1112,7 @@ sub skipOldLink($)
         }
     }
     
-    if($VType ne "release"
+    if(($VType ne "release" or $Snapshot)
     and my $HighestRel = getHighestRelease())
     {
         if(cmpVersions_P($V, $HighestRel, $Profile)==-1)
@@ -1060,7 +1124,6 @@ sub skipOldLink($)
     return 0;
 }
 
-my %Cache;
 sub getHighestRelease()
 {
     if(defined $Cache{"HighestRelease"}) {
@@ -1435,6 +1498,11 @@ sub createProfile($)
                 next;
             }
             
+            if(defined $Profile->{"SnapshotVer"}
+            and $V eq $Profile->{"SnapshotVer"}) {
+                next;
+            }
+            
             if(getVersionType($V, $Profile) eq "release")
             {
                 if(not defined $MaxRelease) {
@@ -1695,12 +1763,76 @@ sub installArchives($)
 {
     my $To = $_[0];
     
-    foreach my $F (findArchives("."))
+    my @Archives = findArchives(".");
+    
+    foreach my $F (@Archives)
     {
-        my $O_To = $To."/".$F;
-        my $D_To = getDirname($O_To);
-        mkpath($D_To);
-        copy($F, $D_To);
+        if(not isJavaImage($F))
+        {
+            my $O_To = $To."/".$F;
+            my $D_To = getDirname($O_To);
+            mkpath($D_To);
+            copy($F, $D_To);
+        }
+    }
+    
+    foreach my $F (@Archives)
+    {
+        if(isJavaImage($F))
+        {
+            my $AbsF = abs_path($F);
+            my $JImage = "jimage";
+            my $JMod = "jmod";
+            
+            if(not checkCmd($JImage))
+            {
+                if(my $JdkPath = $Profile->{"JdkPath"})
+                {
+                    $JImage = $JdkPath."/bin/".$JImage;
+                    $JMod = $JdkPath."/bin/".$JMod;
+                    
+                    if(not -e $JImage or not -e $JMod) {
+                        exitStatus("Access_Error", "can't find jimage and jmod");
+                    }
+                }
+                else {
+                    exitStatus("Error", "please set JdkPath option of the profile to Java 9 or higher");
+                }
+            }
+            
+            my $ExtractPath = $TMP_DIR."/modules/";
+            mkpath($ExtractPath);
+            
+            chdir($ExtractPath);
+            
+            printMsg("INFO", "Installing modules");
+            system($JImage, "extract", $AbsF);
+            if($?) {
+                exitStatus("Error", "can't extract \'$F\'");
+            }
+            
+            my $ToDir = $To."/jmods";
+            mkpath($ToDir);
+            
+            foreach my $FD (listDir("."))
+            {
+                my $FM = $FD.".jmod";
+                
+                if(-e $ToDir."/".$FM) {
+                    next;
+                }
+                
+                printMsg("INFO", "Installing module $FM");
+                system($JMod, "create", $FM, "--class-path", $FD);
+                if($?) {
+                    exitStatus("Error", "can't create module \'$FM\'");
+                }
+                move($FM, $ToDir."/".$FM);
+            }
+            
+            chdir($ORIG_DIR);
+            rmtree($ExtractPath);
+        }
     }
 }
 
@@ -1732,6 +1864,9 @@ sub copyFiles($)
                 
                 foreach my $F (@Files)
                 {
+                    if(isJavaImage($F)) {
+                        next;
+                    }
                     my $O_To = $To."/".$F;
                     my $D_To = getDirname($O_To);
                     mkpath($D_To);
@@ -1764,7 +1899,7 @@ sub findArchives($)
     
     foreach my $File (sort {lc($a) cmp lc($b)} @Files)
     {
-        if(isArchive($File)) {
+        if(isArchive($File) or isJavaModule($File) or isJavaImage($File)) {
             push(@Archives, $File);
         }
     }
