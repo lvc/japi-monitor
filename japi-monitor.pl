@@ -82,7 +82,7 @@ my %ERROR_CODE = (
 my $ShortUsage = "Java API Monitor $TOOL_VERSION
 A tool to monitor new versions of a Java library
 Copyright (C) 2018 Andrey Ponomarenko's ABI Laboratory
-License: GPL or LGPL
+License: LGPLv2.1+
 
 Usage: $CmdName [options] [profile]
 Example:
@@ -129,7 +129,7 @@ DESCRIPTION:
   visualizing API changes timeline.
 
   This tool is free software: you can redistribute it and/or
-  modify it under the terms of the GNU LGPL or GNU GPL.
+  modify it under the terms of the GNU LGPL.
 
 USAGE:
   $CmdName [options] [profile]
