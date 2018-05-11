@@ -110,7 +110,9 @@ GetOptions("h|help!" => \$In::Opt{"Help"},
   "v=s" => \$In::Opt{"TargetVersion"},
   "output=s" => \$In::Opt{"OutputProfile"},
   "build-new!" => \$In::Opt{"BuildNew"},
-  "debug!" => \$In::Opt{"Debug"}
+  "debug!" => \$In::Opt{"Debug"},
+  "clean-unused!" => \$In::Opt{"CleanUnused"},
+  "confirm!" => \$In::Opt{"Confirm"}
 ) or ERR_MESSAGE();
 
 sub ERR_MESSAGE()
@@ -178,6 +180,9 @@ GENERAL OPTIONS:
   
   -debug
       Enable debug messages.
+  
+  -clean-unused
+      Remove unused source packages and install trees.
 ";
 
 # Global
@@ -656,8 +661,11 @@ sub getVersions()
     }
 }
 
-sub getHighRelease()
+sub getHighestRelease()
 {
+    if(defined $Cache{"HighestRelease"}) {
+        return $Cache{"HighestRelease"};
+    }
     my @Vers = keys(%{$DB->{"Source"}});
     @Vers = naturalSequence($Profile, @Vers);
     @Vers = reverse(@Vers);
@@ -666,30 +674,32 @@ sub getHighRelease()
     {
         if(getVersionType($V, $Profile) eq "release")
         {
-            return $V;
+            return ($Cache{"HighestRelease"} = $V);
         }
     }
     
     return undef;
 }
 
-sub getHighBeta()
+sub getLatestVersion()
 {
-    my @Vers = keys(%{$DB->{"Source"}});
-    @Vers = naturalSequence($Profile, @Vers);
-    @Vers = reverse(@Vers);
+    if(defined $Cache{"LatestVersion"}) {
+        return $Cache{"LatestVersion"};
+    }
     
-    foreach my $V (@Vers)
+    if(my @Vers = keys(%{$DB->{"Source"}}))
     {
-        if(defined $Profile->{"SnapshotVer"}
-        and $V eq $Profile->{"SnapshotVer"}) {
-            next;
-        }
-        if(getVersionType($V, $Profile) eq "release") {
-            return undef;
-        }
-        else {
-            return $V;
+        @Vers = naturalSequence($Profile, @Vers);
+        @Vers = reverse(@Vers);
+        
+        foreach my $V (@Vers)
+        {
+            if(defined $Profile->{"SnapshotVer"}
+            and $V eq $Profile->{"SnapshotVer"}) {
+                next;
+            }
+            
+            return ($Cache{"LatestVersion"} = $V);
         }
     }
     
@@ -741,7 +751,7 @@ sub getPackage($$$)
     if(lc($V) ne "snapshot"
     and getVersionType($V, $Profile) ne "release")
     {
-        if(my $HighRelease = getHighRelease())
+        if(my $HighRelease = getHighestRelease())
         {
             if(cmpVersions_P($V, $HighRelease, $Profile)==-1)
             { # do not download old alfa/beta/pre releases
@@ -749,19 +759,34 @@ sub getPackage($$$)
             }
         }
         
-        if(my $HighBeta = getHighBeta())
+        if(my $LatestVersion = getLatestVersion())
         {
-            if(cmpVersions_P($V, $HighBeta, $Profile)==-1)
-            { # do not download old alfa/beta/pre releases
+            if(cmpVersions_P($V, $LatestVersion, $Profile)==-1)
+            { # do not download previous alfa/beta/pre releases
                 return -1;
             }
         }
     }
     
-    if(defined $Profile->{"LatestMicro"} and $Profile->{"LatestMicro"} eq "On")
+    if(defined $Profile->{"MinimalDownload"})
+    {
+        if(cmpVersions_P($V, $Profile->{"MinimalDownload"}, $Profile)==-1) {
+            return -1;
+        }
+    }
+    
+    if(defined $Profile->{"LatestMicro"})
     {
         if(isOldMicro($V, 2))
         { # do not download old micro releases
+            return -1;
+        }
+    }
+    
+    if(defined $Profile->{"LatestNano"})
+    {
+        if(isOldMicro($V, 3))
+        { # do not download old nano releases
             return -1;
         }
     }
@@ -842,6 +867,8 @@ sub getPackage($$$)
     
     $DB->{"Source"}{$V} = $To;
     $NewVer{$V} = 1;
+    $Cache{"HighestRelease"} = undef;
+    $Cache{"LatestVersion"}  = undef;
     
     return 1;
 }
@@ -1131,26 +1158,6 @@ sub skipOldLink($$)
     return 0;
 }
 
-sub getHighestRelease()
-{
-    if(defined $Cache{"HighestRelease"}) {
-        return $Cache{"HighestRelease"};
-    }
-    my @Vers = keys(%{$DB->{"Source"}});
-    @Vers = naturalSequence($Profile, @Vers);
-    @Vers = reverse(@Vers);
-    
-    foreach my $V (@Vers)
-    {
-        if(getVersionType($V, $Profile) eq "release")
-        {
-            return ($Cache{"HighestRelease"} = $V);
-        }
-    }
-    
-    return undef;
-}
-
 sub getLinks($)
 {
     my $PageRef = $_[0];
@@ -1311,6 +1318,57 @@ sub linkSum($$)
     }
     
     return getDirname($Page)."/".$Path;
+}
+
+sub cleanUnused()
+{
+    printMsg("INFO", "Cleaning unused data");
+    
+    foreach my $V (sort {cmpVersions_P($b, $a, $Profile)} keys(%{$DB->{"Installed"}}))
+    {
+        if($V eq "current") {
+            next;
+        }
+        
+        my $IDir = $DB->{"Installed"}{$V};
+        
+        if((defined $Profile->{"Versions"} and (not defined $Profile->{"Versions"}{$V}
+        or $Profile->{"Versions"}{$V}{"Deleted"})) or skipVersion($V, $Profile, 1))
+        {
+            if(defined $In::Opt{"Confirm"})
+            {
+                printMsg("INFO", "Removing: $IDir");
+                rmtree($IDir);
+            }
+            else {
+                printMsg("INFO", "To remove: $IDir");
+            }
+        }
+    }
+    
+    foreach my $V (sort {cmpVersions_P($b, $a, $Profile)} keys(%{$DB->{"Source"}}))
+    {
+        if($V eq "current") {
+            next;
+        }
+        
+        if(skipVersion($V, $Profile, 1)
+        or (defined $Profile->{"Versions"} and $Profile->{"Versions"}{$V}{"Deleted"}))
+        {
+            if(defined $In::Opt{"Confirm"})
+            {
+                printMsg("INFO", "Removing: ".$DB->{"Source"}{$V});
+                rmtree(getDirname($DB->{"Source"}{$V}));
+            }
+            else {
+                printMsg("INFO", "To remove: ".$DB->{"Source"}{$V});
+            }
+        }
+    }
+    
+    if(not defined $In::Opt{"Confirm"}) {
+        printMsg("INFO", "Retry with -confirm option to remove files");
+    }
 }
 
 sub buildVersions()
@@ -1533,7 +1591,7 @@ sub createProfile($)
         }
     }
     
-    if(defined $Profile->{"LatestMicro"} and $Profile->{"LatestMicro"} eq "On")
+    if(defined $Profile->{"LatestMicro"})
     {
         my %MaxMicro = ();
         foreach my $V (reverse(@Versions))
@@ -1553,6 +1611,30 @@ sub createProfile($)
             }
             else {
                 $MaxMicro{$M} = $V;
+            }
+        }
+    }
+    
+    if(defined $Profile->{"LatestNano"})
+    {
+        my %MaxNano = ();
+        foreach my $V (reverse(@Versions))
+        {
+            if($V eq "current") {
+                next;
+            }
+            
+            my $M = getMajor($V, 3);
+            
+            if(defined $MaxNano{$M})
+            {
+                if(not defined $Profile->{"Versions"}{$V}{"Deleted"})
+                { # One can set Deleted to 0 in order to prevent deleting
+                    $Profile->{"Versions"}{$V}{"Deleted"} = 1;
+                }
+            }
+            else {
+                $MaxNano{$M} = $V;
             }
         }
     }
@@ -2221,6 +2303,10 @@ sub scenario()
     
     checkDB();
     checkFiles();
+    
+    if($In::Opt{"CleanUnused"}) {
+        cleanUnused();
+    }
     
     if($In::Opt{"GetOld"}) {
         getVersions();
