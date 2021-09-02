@@ -110,9 +110,11 @@ GetOptions("h|help!" => \$In::Opt{"Help"},
   "v=s" => \$In::Opt{"TargetVersion"},
   "output=s" => \$In::Opt{"OutputProfile"},
   "build-new!" => \$In::Opt{"BuildNew"},
+  "analyze!" => \$In::Opt{"Analyze"},
   "debug!" => \$In::Opt{"Debug"},
   "clean-unused!" => \$In::Opt{"CleanUnused"},
-  "confirm!" => \$In::Opt{"Confirm"}
+  "confirm!" => \$In::Opt{"Confirm"},
+  "redownload!" => \$In::Opt{"Redownload"}
 ) or ERR_MESSAGE();
 
 sub ERR_MESSAGE()
@@ -661,12 +663,17 @@ sub getVersions()
     }
 }
 
+sub getKnownVersions()
+{ # all source packages including installed/cleaned
+    return uniqueArray((keys(%{$DB->{"Source"}}), keys(%{$DB->{"Installed"}}), keys(%{$Profile->{"Versions"}})));
+}
+
 sub getHighestRelease()
 {
     if(defined $Cache{"HighestRelease"}) {
         return $Cache{"HighestRelease"};
     }
-    my @Vers = keys(%{$DB->{"Source"}});
+    my @Vers = getKnownVersions();
     @Vers = naturalSequence($Profile, @Vers);
     @Vers = reverse(@Vers);
     
@@ -687,7 +694,7 @@ sub getLatestVersion()
         return $Cache{"LatestVersion"};
     }
     
-    if(my @Vers = keys(%{$DB->{"Source"}}))
+    if(my @Vers = getKnownVersions())
     {
         @Vers = naturalSequence($Profile, @Vers);
         @Vers = reverse(@Vers);
@@ -711,11 +718,11 @@ sub isOldMicro($$)
     my ($V, $L) = @_;
     my $M = getMajor($V, $L);
     
-    foreach my $Ver (sort keys(%{$DB->{"Source"}}))
+    foreach my $Ver (getKnownVersions())
     {
         if(getMajor($Ver, $L) eq $M)
         {
-            if(cmpVersions_P($Ver, $V, $Profile)>=0)
+            if(cmpVersions_P($Ver, $V, $Profile)>0)
             {
                 return 1;
             }
@@ -723,6 +730,64 @@ sub isOldMicro($$)
     }
     
     return 0;
+}
+
+sub isOldVer($)
+{
+    my $V = $_[0];
+    
+    if(defined $Profile->{"LatestMinor"})
+    {
+        if(isOldMicro($V, 1))
+        { # do not download old minor releases
+            return 1;
+        }
+    }
+    
+    if(defined $Profile->{"LatestMicro"})
+    {
+        if(isOldMicro($V, 2))
+        { # do not download old micro releases
+            return 1;
+        }
+    }
+    
+    if(defined $Profile->{"LatestNano"})
+    {
+        if(isOldMicro($V, 3))
+        { # do not download old nano releases
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
+sub notNeededSrc($)
+{
+    my $V = $_[0];
+    
+    if($V=~/snapshot/i) {
+        return undef;
+    }
+    
+    if(-d "api_dump/".$TARGET_LIB."/".$V) {
+        return "dumped";
+    }
+    elsif(defined $DB->{"Installed"}{$V}
+    and $DB->{"Installed"}{$V}=~/$INSTALLED/) {
+        return "installed";
+    }
+    elsif(defined $Profile->{"Versions"}{$V}
+    and $Profile->{"Versions"}{$V}{"Deleted"}) {
+        return "deleted";
+    }
+    elsif(isOldVer($V))
+    { # old micro/nano releases
+        return "obsoleted";
+    }
+    
+    return undef;
 }
 
 sub getPackage($$$)
@@ -768,25 +833,22 @@ sub getPackage($$$)
         }
     }
     
+    my $NotNeeded = notNeededSrc($V);
+    
+    if($NotNeeded and not defined $In::Opt{"Redownload"})
+    { # Do not download installed packages to save space
+        printMsg("INFO", "Skip downloading of already $NotNeeded package for $V");
+        if(not defined $Cache{"RedownloadInfo"})
+        {
+            printMsg("TIP", "Use -redownload option to download it again");
+            $Cache{"RedownloadInfo"} = 1;
+        }
+        return -1;
+    }
+    
     if(defined $Profile->{"MinimalDownload"})
     {
         if(cmpVersions_P($V, $Profile->{"MinimalDownload"}, $Profile)==-1) {
-            return -1;
-        }
-    }
-    
-    if(defined $Profile->{"LatestMicro"})
-    {
-        if(isOldMicro($V, 2))
-        { # do not download old micro releases
-            return -1;
-        }
-    }
-    
-    if(defined $Profile->{"LatestNano"})
-    {
-        if(isOldMicro($V, 3))
-        { # do not download old nano releases
             return -1;
         }
     }
@@ -1133,6 +1195,10 @@ sub skipOldLink($$)
     if(defined $DB->{"Source"}{$V}) {
         return 1;
     }
+    elsif(notNeededSrc($V)
+    and not defined $In::Opt{"Redownload"}) {
+        return 1;
+    }
     elsif(skipVersion($V, $Profile, 0)) {
         return 1;
     }
@@ -1353,7 +1419,7 @@ sub cleanUnused()
         }
         
         if(skipVersion($V, $Profile, 1)
-        or (defined $Profile->{"Versions"} and $Profile->{"Versions"}{$V}{"Deleted"}))
+        or notNeededSrc($V))
         {
             if(defined $In::Opt{"Confirm"})
             {
@@ -1411,6 +1477,11 @@ sub buildVersions()
         
         if(defined $Profile->{"Versions"}
         and defined $Profile->{"Versions"}{$V}{"Deleted"}) {
+            next;
+        }
+        
+        if(isOldVer($V))
+        { # do not build old micro/nano releases
             next;
         }
         
@@ -1587,6 +1658,30 @@ sub createProfile($)
                 if(not defined $MaxBeta) {
                     $MaxBeta = $V;
                 }
+            }
+        }
+    }
+    
+    if(defined $Profile->{"LatestMinor"})
+    {
+        my %MaxMinor = ();
+        foreach my $V (reverse(@Versions))
+        {
+            if($V eq "current") {
+                next;
+            }
+            
+            my $M = getMajor($V, 1);
+            
+            if(defined $MaxMinor{$M})
+            {
+                if(not defined $Profile->{"Versions"}{$V}{"Deleted"})
+                { # One can set Deleted to 0 in order to prevent deleting
+                    $Profile->{"Versions"}{$V}{"Deleted"} = 1;
+                }
+            }
+            else {
+                $MaxMinor{$M} = $V;
             }
         }
     }
@@ -2243,6 +2338,10 @@ sub scenario()
         $In::Opt{"Build"} = 1;
     }
     
+    if($In::Opt{"Redownload"}) {
+        $In::Opt{"Get"} = 1;
+    }
+    
     if(defined $In::Opt{"LimitOps"})
     {
         if($In::Opt{"LimitOps"}<=0) {
@@ -2339,6 +2438,10 @@ sub scenario()
     
     if($TMP_DIR_LOC eq "On") {
         rmtree($TMP_DIR);
+    }
+    
+    if($In::Opt{"Analyze"} and checkCmd("japi-tracker")) {
+        system("japi-tracker", $Output, "-build");
     }
 }
 
