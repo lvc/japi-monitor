@@ -173,4 +173,10 @@ sub checkCmd($)
     return 0;
 }
 
+sub uniqueArray(@)
+{
+    my %Elem = ();
+    return grep {!$Elem{$_}++} sort @_;
+}
+
 return 1;
