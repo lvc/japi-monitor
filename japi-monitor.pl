@@ -4,7 +4,7 @@
 # A tool to monitor new versions of a Java library and create
 # profile for API Tracker.
 #
-# Copyright (C) 2015-2018 Andrey Ponomarenko's ABI Laboratory
+# Copyright (C) 2015-2021 Andrey Ponomarenko's ABI Laboratory
 #
 # Written by Andrey Ponomarenko
 #
@@ -84,7 +84,7 @@ my %ERROR_CODE = (
 
 my $ShortUsage = "Java API Monitor $TOOL_VERSION
 A tool to monitor new versions of a Java library
-Copyright (C) 2018 Andrey Ponomarenko's ABI Laboratory
+Copyright (C) 2021 Andrey Ponomarenko's ABI Laboratory
 License: LGPLv2.1+
 
 Usage: $CmdName [options] [profile]
@@ -104,6 +104,7 @@ GetOptions("h|help!" => \$In::Opt{"Help"},
 # general options
   "get!" => \$In::Opt{"Get"},
   "get-old!" => \$In::Opt{"GetOld"},
+  "get-new!" => \$In::Opt{"GetNew"},
   "build!" => \$In::Opt{"Build"},
   "rebuild!" => \$In::Opt{"Rebuild"},
   "limit=s" => \$In::Opt{"LimitOps"},
@@ -849,6 +850,14 @@ sub getPackage($$$)
     if(defined $Profile->{"MinimalDownload"})
     {
         if(cmpVersions_P($V, $Profile->{"MinimalDownload"}, $Profile)==-1) {
+            return -1;
+        }
+    }
+    
+    if($In::Opt{"GetNew"})
+    {
+        if(cmpVersions_P($V, getHighestRelease(), $Profile)==-1)
+        { # do not download old versions
             return -1;
         }
     }
@@ -2405,6 +2414,10 @@ sub scenario()
     
     if($In::Opt{"CleanUnused"}) {
         cleanUnused();
+    }
+    
+    if($In::Opt{"GetNew"}) {
+        $In::Opt{"Get"} = 1;
     }
     
     if($In::Opt{"GetOld"}) {
